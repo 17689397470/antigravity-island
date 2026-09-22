@@ -27,7 +27,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo [3/3] 正在推送到 Gitee (gitee main)...
-git push -u gitee main
+git -c http.proxy="" push -u gitee main
 if %errorlevel% neq 0 (
     echo [警告] 推送到 Gitee 遇到问题，可能需要登录或检查网络连接。
 ) else (
