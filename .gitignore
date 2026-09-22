@@ -46,3 +46,8 @@ config.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Personal maintenance scripts & local shortcuts (keep locally, exclude from repo)
+一键推送到GitHub与Gitee.bat
+启动灵动岛.bat
+run_silent.vbs

@@ -95,7 +95,7 @@ pip install -r requirements.txt
 ```
 
 ### 3. 启动灵动岛
-- **方式一（无控制台静默启动，推荐）**：双击 `start.bat` 或 `启动灵动岛.bat`。
+- **方式一（无控制台静默启动，推荐）**：双击 `start.bat`。
 - **方式二（调试运行）**：
   ```bash
   python capsule_gui.py
