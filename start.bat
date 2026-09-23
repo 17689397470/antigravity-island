@@ -1,5 +1,9 @@
 @echo off
 cd /d "%~dp0"
+if exist "%~dp0dist\AntigravityIsland.exe" (
+    start "" "%~dp0dist\AntigravityIsland.exe"
+    exit /b 0
+)
 where pythonw >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     start "" pythonw "%~dp0capsule_gui.py"
