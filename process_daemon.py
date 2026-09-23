@@ -160,6 +160,32 @@ def _find_antigravity_hwnd():
     return None
 
 
+def get_antigravity_window_rect():
+    """
+    获取当前 Antigravity 宿主主窗口的屏幕坐标矩形 (left, top, right, bottom)。
+    若未运行或窗口最小化/未找到，返回 None。
+    """
+    global _CACHED_HWND
+    try:
+        if _CACHED_HWND and user32.IsWindow(_CACHED_HWND) and user32.IsWindowVisible(_CACHED_HWND):
+            rect = ctypes.wintypes.RECT()
+            if user32.GetWindowRect(_CACHED_HWND, ctypes.byref(rect)):
+                w = rect.right - rect.left
+                h = rect.bottom - rect.top
+                if w > 300 and h > 200:
+                    return (rect.left, rect.top, rect.right, rect.bottom)
+            _CACHED_HWND = None
+
+        hwnd = _find_antigravity_hwnd()
+        if hwnd:
+            rect = ctypes.wintypes.RECT()
+            if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return (rect.left, rect.top, rect.right, rect.bottom)
+    except Exception:
+        pass
+    return None
+
+
 def _activate_window_hw(hwnd):
     """Win32 穿透锁极速激活置顶"""
     try:

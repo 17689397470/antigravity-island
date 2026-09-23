@@ -29,24 +29,126 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.path.join(CURRENT_DIR, "capsule_runtime.log"), "a", encoding="utf-8")
 
-from PyQt6.QtWidgets import QApplication, QWidget
+import winreg
+
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QSystemTrayIcon, QMenu
+)
 from PyQt6.QtCore import (
     Qt, QRect, QRectF, QPoint, QPointF,
     QTimer, QThread, pyqtSignal, QEvent, QUrl
 )
-from PyQt6.QtGui import QPainter, QPainterPath, QColor, QFont, QFontMetrics, QPen, QBrush, QRegion, QCursor, QPixmap
+from PyQt6.QtGui import (
+    QPainter, QPainterPath, QColor, QFont, QFontMetrics,
+    QPen, QBrush, QRegion, QCursor, QPixmap, QLinearGradient,
+    QIcon, QAction
+)
 from PyQt6.QtWebSockets import QWebSocket
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 import urllib.request
 
 from brain_monitor import get_context_metrics, TOTAL_CAPACITY
 from process_daemon import (
     is_antigravity_running,
     is_antigravity_foreground,
-    bring_antigravity_to_foreground
+    bring_antigravity_to_foreground,
+    get_antigravity_window_rect
 )
 
 CONFIG_FILE = os.path.join(CURRENT_DIR, "config.json")
 WINDOW_TITLE = "AntigravityDynamicIsland"
+
+AUTOSTART_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_APP_NAME = "AntigravityIsland"
+
+
+def is_autostart_enabled():
+    """读取注册表当前用户启动项，检测是否已开启开机自启"""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_REG_KEY, 0, winreg.KEY_READ) as key:
+            val, _ = winreg.QueryValueEx(key, AUTOSTART_APP_NAME)
+            return bool(val)
+    except Exception:
+        return False
+
+
+def set_autostart_enabled(enable: bool):
+    """设置或移除注册表开机静默自启项"""
+    vbs_path = os.path.join(CURRENT_DIR, "run_silent.vbs")
+    cmd = f'wscript.exe "{vbs_path}"'
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_REG_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            if enable:
+                winreg.SetValueEx(key, AUTOSTART_APP_NAME, 0, winreg.REG_SZ, cmd)
+            else:
+                try:
+                    winreg.DeleteValue(key, AUTOSTART_APP_NAME)
+                except FileNotFoundError:
+                    pass
+        return True
+    except Exception:
+        return False
+
+
+def generate_tray_icon(is_busy=False, percent=0.0, pending_act=None):
+    """
+    手绘 32x32 高清矢量系统托盘图标：
+    - 黑曜石胶囊底座 + 微光边框
+    - 左侧状态指示灯 (待机绿 / 忙碌蓝 / 阻断待办橙或蓝)
+    - 右侧根据 Token 百分比动态绘制的环形进度圈
+    """
+    pix = QPixmap(32, 32)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    # 1. 胶囊底座 (30x18 居中圆角胶囊)
+    rect = QRectF(1.0, 7.0, 30.0, 18.0)
+    painter.setBrush(QBrush(QColor(16, 16, 20, 240)))
+    painter.setPen(QPen(QColor(255, 255, 255, 80), 1.0))
+    painter.drawRoundedRect(rect, 9.0, 9.0)
+
+    # 2. 状态核心指示灯
+    if pending_act == "ask_question":
+        core_color = QColor(245, 158, 11)   # 琥珀橙
+    elif pending_act == "plan_approval":
+        core_color = QColor(59, 130, 246)   # 宝石蓝
+    elif is_busy:
+        core_color = QColor(56, 189, 248)   # 天空蓝
+    else:
+        core_color = QColor(16, 185, 129)   # 翡翠绿
+
+    # 左侧状态晶核 (半径 2.6px)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(core_color))
+    painter.drawEllipse(QPointF(9.5, 16.0), 2.6, 2.6)
+
+    # 3. 右侧环形进度圈
+    ring_cx = 22.0
+    ring_cy = 16.0
+    ring_r = 4.6
+    ring_rect = QRectF(ring_cx - ring_r, ring_cy - ring_r, ring_r * 2.0, ring_r * 2.0)
+
+    # 暗轨底环
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(QColor(255, 255, 255, 45), 1.4))
+    painter.drawEllipse(QPointF(ring_cx, ring_cy), ring_r, ring_r)
+
+    # 前景进度弧 (顺时针展开)
+    if percent > 0.5:
+        if percent < 60.0:
+            arc_c = QColor(16, 185, 129)
+        elif percent < 85.0:
+            arc_c = QColor(245, 158, 11)
+        else:
+            arc_c = QColor(239, 68, 68)
+        prog_pen = QPen(arc_c, 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        painter.setPen(prog_pen)
+        span_angle = int(-min(100.0, max(0.0, percent)) / 100.0 * 360.0 * 16)
+        painter.drawArc(ring_rect, 90 * 16, span_angle)
+
+    painter.end()
+    return QIcon(pix)
 
 
 def send_decision_via_cdp(action_type, choice=""):
@@ -218,7 +320,9 @@ def load_config():
         "x": None,
         "y": 12,
         "on_top": True,
-        "auto_hide": True
+        "auto_hide": True,
+        "auto_tuck": True,
+        "tuck_delay_ms": 4000
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -238,14 +342,60 @@ def save_config(cfg):
         pass
 
 
+IPC_PIPE_NAME = "AntigravityIsland_IPC_Server_Pipe"
+MUTEX_NAME = "Local\\AntigravityIsland_SingleInstance_Mutex"
+_GLOBAL_MUTEX_HANDLE = None
+
+
 def check_single_instance_or_wake():
-    """检测单实例：仅当桌面确实存在可见窗口时才唤醒并退出"""
-    hwnd = ctypes.windll.user32.FindWindowW(None, WINDOW_TITLE)
-    if hwnd and ctypes.windll.user32.IsWindow(hwnd):
-        if ctypes.windll.user32.IsWindowVisible(hwnd):
-            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
-            return False
+    """
+    工业级单实例互斥与进程间唤醒：
+    1. 使用 Windows 内核命名互斥体 (CreateMutexW)，无论主岛处于显示、隐藏、极简还是托盘，100% 杜绝多开；
+    2. 若检测到实例已存在，通过 QLocalSocket 向已运行实例发送 WAKE_UP 指令，将其从后台/托盘唤醒至屏幕前台；
+    3. 进程异常退出时，Windows 内核自动释放 Mutex，绝不残留死锁。
+    """
+    global _GLOBAL_MUTEX_HANDLE
+    ERROR_ALREADY_EXISTS = 183
+    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    last_err = ctypes.windll.kernel32.GetLastError()
+
+    if last_err == ERROR_ALREADY_EXISTS:
+        if mutex:
+            ctypes.windll.kernel32.CloseHandle(mutex)
+        # 向已运行的旧实例发送唤醒指令
+        sent_wakeup = False
+        try:
+            sock = QLocalSocket()
+            sock.connectToServer(IPC_PIPE_NAME)
+            if sock.waitForConnected(600):
+                sock.write(b"WAKE_UP\n")
+                sock.waitForBytesWritten(400)
+                sock.disconnectFromServer()
+                sent_wakeup = True
+        except Exception:
+            pass
+
+        # 若旧实例连不上（说明处于僵死/无响应状态），自动清理残留进程并接管启动，确保 100% 能双击拉起！
+        if not sent_wakeup:
+            try:
+                import subprocess
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "Get-Process python*, pythonw* -ErrorAction SilentlyContinue | "
+                     f"Where-Object Id -ne {os.getpid()} | "
+                     "ForEach-Object { try { $c = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $_.Id)).CommandLine; if ($c -like '*capsule_gui.py*') { Stop-Process -Id $_.Id -Force } } catch {} }"],
+                    capture_output=True, timeout=2.0
+                )
+                time.sleep(0.3)
+                m2 = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
+                _GLOBAL_MUTEX_HANDLE = m2
+                return True
+            except Exception:
+                pass
+
+        return False
+
+    _GLOBAL_MUTEX_HANDLE = mutex
     return True
 
 
@@ -329,13 +479,21 @@ class MiniPillBar(QWidget):
     def popup(self, center_x, top_y):
         """在灵动岛正下方弹出，启动 1->2->3 鲜明错位落体弹跳动效"""
         self.is_closing = False
-        screen = QApplication.primaryScreen().availableGeometry()
+        target_scr = QApplication.screenAt(QPoint(int(center_x), int(top_y)))
+        if not target_scr:
+            target_scr = QApplication.primaryScreen()
+        avail = target_scr.availableGeometry()
 
         win_x = int(center_x - self.WIN_W / 2.0)
         win_y = int(top_y - self.PADDING)
 
-        win_x = max(10, min(win_x, screen.width() - self.WIN_W - 10))
-        win_y = max(10, min(win_y, screen.height() - self.WIN_H - 10))
+        min_x = avail.left() + 10
+        max_x = avail.left() + avail.width() - self.WIN_W - 10
+        min_y = avail.top() + 10
+        max_y = avail.top() + avail.height() - self.WIN_H - 10
+
+        win_x = max(min_x, min(win_x, max_x))
+        win_y = max(min_y, min(win_y, max_y))
         self.move(win_x, win_y)
 
         # 初始化动力学初态 (初始向上偏移 16px，缩放为 0.2)
@@ -886,11 +1044,21 @@ class ActionFlyoutCard(QWidget):
         win_h = int(self.current_card_h + self.PADDING * 2)
         self.resize(win_w, win_h)
 
-        screen = QApplication.primaryScreen().availableGeometry()
+        target_scr = QApplication.screenAt(QPoint(int(center_x), int(top_y)))
+        if not target_scr:
+            target_scr = QApplication.primaryScreen()
+        avail = target_scr.availableGeometry()
+
         win_x = int(center_x - win_w / 2.0)
         win_y = int(top_y - self.PADDING)
-        win_x = max(10, min(win_x, screen.width() - win_w - 10))
-        win_y = max(10, min(win_y, screen.height() - win_h - 10))
+
+        min_x = avail.left() + 10
+        max_x = avail.left() + avail.width() - win_w - 10
+        min_y = avail.top() + 10
+        max_y = avail.top() + avail.height() - win_h - 10
+
+        win_x = max(min_x, min(win_x, max_x))
+        win_y = max(min_y, min(win_y, max_y))
         self.move(win_x, win_y)
 
         # 在第 0ms 一次性烘焙离屏纹理，彻底粉碎单帧文本光栅化瓶颈！
@@ -1482,10 +1650,22 @@ class SmoothDynamicIsland(QWidget):
         self.is_notifying = False
         self.notify_duration_str = ""
         self.is_mouse_inside = False
+        self.is_manually_hidden = False
+        self.last_running = None
 
         # 最小微圆状态 (Minimal Mode: 30px 屏幕顶部居中纯黑曜石微圆)
         self.is_minimal_mode = bool(self.cfg.get("minimal_mode", False))
         self.minimal_hover_alpha = 0.0
+
+        # 边缘贴靠灵动收缩 (Edge Notch Auto-Tuck) 状态与物理动力学
+        self.auto_tuck_enabled = bool(self.cfg.get("auto_tuck", True))
+        self.tuck_delay_ms = int(self.cfg.get("tuck_delay_ms", 4000))
+        self.is_tucked = False
+        self.tuck_y_offset = 0.0          # 当前平移偏移量（0.0 展开态，-39.0 完全贴顶）
+        self.tuck_target_y_offset = 0.0   # 目标平移偏移量
+        self.tuck_vel = 0.0               # 物理二阶弹簧速度
+        self.base_win_y = 0               # 展开态基准物理 Y 坐标
+        self.last_tuck_tick_time = 0.0
 
         self.init_resources()
         self.update_cached_strings()
@@ -1494,13 +1674,24 @@ class SmoothDynamicIsland(QWidget):
         self.setup_pill_bar()
         self.setup_action_flyout()
         self.setup_worker()
+        self.setup_tray_icon()
+        self.setup_ipc_server()
+        self.schedule_auto_tuck()
 
     def init_resources(self):
-        self.f_proj = QFont("Segoe UI", 9)
-        self.f_proj.setBold(True)
+        # 瑞士现代排版：优先 Segoe UI Variable Text / Segoe UI，Medium 500 字重，优雅克制
+        self.f_proj = QFont("Segoe UI Variable Text", 9)
+        if not self.f_proj.exactMatch():
+            self.f_proj = QFont("Segoe UI", 9)
+        self.f_proj.setWeight(QFont.Weight.Medium)
 
+        # 百分比数字与符号精细分离
         self.f_pct = QFont("Consolas", 9)
         self.f_pct.setBold(True)
+        self.f_pct_sym = QFont("Segoe UI Variable Text", 7)
+        if not self.f_pct_sym.exactMatch():
+            self.f_pct_sym = QFont("Segoe UI", 7)
+        self.f_pct_sym.setWeight(QFont.Weight.Medium)
 
         self.f_notify = QFont("Segoe UI", 9)
         self.f_notify.setBold(True)
@@ -1532,6 +1723,62 @@ class SmoothDynamicIsland(QWidget):
         self.c_sys = QColor(168, 85, 247)
         self.c_user = QColor(56, 189, 248)
 
+    def get_target_screen(self):
+        """
+        智能探测灵动岛目标停靠显示器：
+        1. 优先探测 Antigravity IDE 宿主主窗口所在显示器；
+        2. 若未探测到 IDE 窗口，则使用鼠标当前所在显示器；
+        3. 兜底使用系统主显示器 (primaryScreen)。
+        """
+        # 1. 优先根据 Antigravity IDE 宿主窗口探测
+        try:
+            rect = get_antigravity_window_rect()
+            if rect:
+                cx = (rect[0] + rect[2]) // 2
+                cy = (rect[1] + rect[3]) // 2
+                scr = QApplication.screenAt(QPoint(cx, cy))
+                if scr:
+                    return scr
+        except Exception:
+            pass
+
+        # 2. 探测鼠标光标所在屏幕
+        try:
+            scr = QApplication.screenAt(QCursor.pos())
+            if scr:
+                return scr
+        except Exception:
+            pass
+
+        # 3. 兜底返回主屏幕
+        return QApplication.primaryScreen()
+
+    def on_screen_removed(self, screen):
+        """显示器拔出或休眠断开：安全校验当前屏幕有效性，平滑回退主屏"""
+        cur_center = self.geometry().center()
+        still_valid = QApplication.screenAt(cur_center)
+        if still_valid is None:
+            self.reset_to_center(QApplication.primaryScreen())
+
+    def on_screen_added(self, screen):
+        """新显示器插入：若当前处于不可见盲区，重新校准"""
+        cur_center = self.geometry().center()
+        if QApplication.screenAt(cur_center) is None:
+            self.reset_to_center(QApplication.primaryScreen())
+
+    def on_window_screen_changed(self, new_screen):
+        """窗口跨屏移动，DPI 或物理屏幕发生跃迁时自动刷新遮罩与矢量渲染"""
+        if new_screen:
+            self.update_mask()
+            self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        wh = self.windowHandle()
+        if wh and not hasattr(self, "_screen_changed_connected"):
+            wh.screenChanged.connect(self.on_window_screen_changed)
+            self._screen_changed_connected = True
+
     def setup_window(self):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -1541,8 +1788,31 @@ class SmoothDynamicIsland(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
-        screen = QApplication.primaryScreen().availableGeometry()
-        default_capsule_x = (screen.width() - COMPACT_W) // 2
+        # 智能跟随 + 手动记忆复合定位
+        target_scr = None
+        capsule_x = self.cfg.get("x")
+        capsule_y = self.cfg.get("y", 12)
+
+        if capsule_x is not None and isinstance(capsule_x, (int, float)):
+            test_pt = QPoint(int(capsule_x + COMPACT_W / 2.0), int(capsule_y + COMPACT_H / 2.0))
+            scr = QApplication.screenAt(test_pt)
+            if scr:
+                target_scr = scr
+
+        if target_scr is None:
+            target_scr = self.get_target_screen()
+            avail = target_scr.availableGeometry()
+            capsule_x = avail.left() + (avail.width() - COMPACT_W) // 2
+            capsule_y = avail.top() + 12
+
+        avail = target_scr.availableGeometry()
+        min_cx = avail.left()
+        max_cx = avail.left() + avail.width() - COMPACT_W
+        capsule_x = max(min_cx, min(capsule_x, max_cx))
+
+        min_cy = avail.top()
+        max_cy = avail.top() + avail.height() - COMPACT_H
+        capsule_y = max(min_cy, min(capsule_y, max_cy))
 
         if self.is_minimal_mode:
             self.current_w = 30.0
@@ -1551,25 +1821,20 @@ class SmoothDynamicIsland(QWidget):
             self.target_h = 30.0
             self.droplet_scale = 0.0
             self.droplet_target_scale = 0.0
-            capsule_x = default_capsule_x
-            capsule_y = self.cfg.get("y", 12)
-        else:
-            capsule_x = self.cfg.get("x")
-            capsule_y = self.cfg.get("y", 12)
-            if capsule_x is None or not isinstance(capsule_x, (int, float)):
-                capsule_x = default_capsule_x
 
         win_x = int(capsule_x - (CANVAS_W - COMPACT_W) / 2.0)
         win_y = int(capsule_y - PADDING_TOP)
-
-        max_x = screen.width() - CANVAS_W
-        max_y = screen.height() - CANVAS_H
-        win_x = max(0, min(win_x, max_x))
-        win_y = max(0, min(win_y, max_y))
+        self.base_win_y = win_y
 
         self.setGeometry(win_x, win_y, CANVAS_W, CANVAS_H)
         self.update_mask()
         self.make_topmost()
+
+        # 监听多显示器热插拔事件
+        app = QApplication.instance()
+        if app:
+            app.screenRemoved.connect(self.on_screen_removed)
+            app.screenAdded.connect(self.on_screen_added)
 
     def make_topmost(self):
         """Win32 硬件级置顶 (HWND_TOPMOST)"""
@@ -1690,6 +1955,23 @@ class SmoothDynamicIsland(QWidget):
         self.droplet_exit_debounce_timer.setInterval(160)
         self.droplet_exit_debounce_timer.timeout.connect(self.on_droplet_exit_confirmed)
 
+        # 4. 边缘贴靠灵动收缩倒计时定时器 (4 秒闲置自动贴顶收缩)
+        self.tuck_countdown_timer = QTimer(self)
+        self.tuck_countdown_timer.setSingleShot(True)
+        self.tuck_countdown_timer.setInterval(self.tuck_delay_ms)
+        self.tuck_countdown_timer.timeout.connect(self.start_tuck)
+
+        # 5. 贴边物理落体弹簧动效定时器 (7ms 高精度物理引擎，滑下带 1.2px 微弹性回弹)
+        self.tuck_spring_timer = QTimer(self)
+        self.tuck_spring_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.tuck_spring_timer.setInterval(7)
+        self.tuck_spring_timer.timeout.connect(self.on_tuck_spring_tick)
+
+        # 6. 贴顶收缩态极顶光标感应时钟 (45ms 极低开销轮询，仅在 is_tucked 时启动)
+        self.tuck_edge_sensor_timer = QTimer(self)
+        self.tuck_edge_sensor_timer.setInterval(45)
+        self.tuck_edge_sensor_timer.timeout.connect(self.check_tuck_edge_hover)
+
     def on_droplet_hover_confirmed(self):
         """鼠标在副岛停留满 120ms，确认为意图悬停：主岛平滑收缩为 30px 圆环，副岛展开为 160px 胶囊，顺势落体弹出大卡片"""
         if self.target_w > COMPACT_W + 5.0 or self.current_w > COMPACT_W + 15.0:
@@ -1745,9 +2027,17 @@ class SmoothDynamicIsland(QWidget):
         self.cfg["minimal_mode"] = True
         save_config(self.cfg)
 
-        # 确保窗口居中到屏幕顶部
-        screen = QApplication.primaryScreen().availableGeometry()
-        default_win_x = (screen.width() - CANVAS_W) // 2
+        if getattr(self, "is_tucked", False):
+            self.untuck(fast=True)
+        if hasattr(self, "tuck_countdown_timer"):
+            self.tuck_countdown_timer.stop()
+
+        # 确保窗口居中到当前所在屏幕顶部
+        cur_screen = QApplication.screenAt(self.geometry().center())
+        if not cur_screen:
+            cur_screen = QApplication.primaryScreen()
+        avail = cur_screen.availableGeometry()
+        default_win_x = avail.left() + (avail.width() - CANVAS_W) // 2
         cur_y = self.y()
         self.move(default_win_x, cur_y)
 
@@ -1777,7 +2067,11 @@ class SmoothDynamicIsland(QWidget):
         elif self.halo_timer.isActive():
             self.halo_timer.stop()
 
-        self.start_spring_animation(COMPACT_W, COMPACT_H, response=0.22, damping_ratio=0.72, on_finished=self.update_mask)
+        def on_exit_done():
+            self.update_mask()
+            self.schedule_auto_tuck()
+
+        self.start_spring_animation(COMPACT_W, COMPACT_H, response=0.22, damping_ratio=0.72, on_finished=on_exit_done)
 
     def setup_action_flyout(self):
         self.action_flyout = ActionFlyoutCard()
@@ -1828,6 +2122,363 @@ class SmoothDynamicIsland(QWidget):
     def force_refresh(self):
         new_m = get_context_metrics(force=True)
         self.on_metrics_updated(new_m)
+
+    # -------------------------------------------------------------
+    # 系统托盘与常驻兜底 (System Tray Icon & Context Menu)
+    # -------------------------------------------------------------
+    def setup_tray_icon(self):
+        self.tray_icon = QSystemTrayIcon(self)
+        self.update_tray_icon()
+
+        self.tray_menu = QMenu()
+        self.setup_tray_menu()
+        self.tray_icon.setContextMenu(self.tray_menu)
+
+        self.tray_icon.activated.connect(self.on_tray_activated)
+        self.tray_icon.show()
+
+    def setup_tray_menu(self):
+        self.tray_menu.setStyleSheet("""
+            QMenu {
+                background-color: #121216;
+                border: 1px solid rgba(255, 255, 255, 0.14);
+                border-radius: 8px;
+                padding: 6px;
+                color: #f4f4f5;
+                font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei', sans-serif;
+                font-size: 12px;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 12px;
+                border-radius: 5px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+            QMenu::item:disabled {
+                color: rgba(255, 255, 255, 0.35);
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: rgba(255, 255, 255, 0.08);
+                margin: 4px 6px;
+            }
+        """)
+
+        self.tray_menu.aboutToShow.connect(self.on_tray_menu_about_to_show)
+
+        self.act_toggle_vis = QAction("隐藏灵动岛", self)
+        self.act_toggle_vis.triggered.connect(self.toggle_visibility_from_tray)
+        self.tray_menu.addAction(self.act_toggle_vis)
+
+        self.act_toggle_mode = QAction("切换至 30px 极简微圆", self)
+        self.act_toggle_mode.triggered.connect(self.toggle_minimal_mode_from_tray)
+        self.tray_menu.addAction(self.act_toggle_mode)
+
+        self.act_auto_tuck = QAction("贴边自动收缩", self)
+        self.act_auto_tuck.setCheckable(True)
+        self.act_auto_tuck.setChecked(self.auto_tuck_enabled)
+        self.act_auto_tuck.triggered.connect(self.toggle_auto_tuck)
+        self.tray_menu.addAction(self.act_auto_tuck)
+
+        self.tray_menu.addSeparator()
+
+        self.act_autostart = QAction("开机自启动", self)
+        self.act_autostart.setCheckable(True)
+        self.act_autostart.setChecked(is_autostart_enabled())
+        self.act_autostart.triggered.connect(self.toggle_autostart)
+        self.tray_menu.addAction(self.act_autostart)
+
+        self.act_refresh = QAction("立即刷新数据", self)
+        self.act_refresh.triggered.connect(self.force_refresh)
+        self.tray_menu.addAction(self.act_refresh)
+
+        self.act_reset_pos = QAction("重置顶部居中", self)
+        self.act_reset_pos.triggered.connect(lambda: self.reset_to_center())
+        self.tray_menu.addAction(self.act_reset_pos)
+
+        # 二级子菜单：停靠至显示器 ▶
+        self.menu_screens = QMenu("停靠至显示器", self.tray_menu)
+        self.menu_screens.setStyleSheet(self.tray_menu.styleSheet())
+        self.tray_menu.addMenu(self.menu_screens)
+
+        self.tray_menu.addSeparator()
+
+        self.act_quit = QAction("彻底退出灵动岛", self)
+        self.act_quit.triggered.connect(self.clean_exit_app)
+        self.tray_menu.addAction(self.act_quit)
+
+    def on_tray_menu_about_to_show(self):
+        if self.isVisible():
+            self.act_toggle_vis.setText("隐藏灵动岛")
+        else:
+            self.act_toggle_vis.setText("显示灵动岛")
+
+        if self.is_minimal_mode:
+            self.act_toggle_mode.setText("恢复为标准岛")
+        else:
+            self.act_toggle_mode.setText("切换至 30px 极简微圆")
+
+        self.act_autostart.setChecked(is_autostart_enabled())
+        self.act_auto_tuck.setChecked(getattr(self, "auto_tuck_enabled", True))
+
+        # 动态刷新所有显示器列表
+        self.menu_screens.clear()
+        screens = QApplication.screens()
+        primary_screen = QApplication.primaryScreen()
+        cur_center = self.geometry().center()
+        current_screen = QApplication.screenAt(cur_center)
+
+        for i, scr in enumerate(screens, 1):
+            geo = scr.geometry()
+            dpr = scr.devicePixelRatio()
+            is_primary = (scr == primary_screen)
+            is_current = (scr == current_screen)
+
+            tag = " (主屏)" if is_primary else ""
+            dpr_str = f" @ {int(round(dpr * 100))}%" if abs(dpr - 1.0) > 0.01 else ""
+            label = f"显示器 {i}{tag} [{geo.width()}x{geo.height()}{dpr_str}]"
+
+            act = QAction(label, self.menu_screens)
+            act.setCheckable(True)
+            act.setChecked(is_current)
+
+            def make_dock_handler(s):
+                return lambda: self.reset_to_center(target_screen=s)
+
+            act.triggered.connect(make_dock_handler(scr))
+            self.menu_screens.addAction(act)
+
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.toggle_visibility_from_tray()
+        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            bring_antigravity_to_foreground()
+            self.is_manually_hidden = False
+            if self.isHidden():
+                self.show()
+                self.make_topmost()
+                self.raise_()
+                self.activateWindow()
+
+    def toggle_visibility_from_tray(self):
+        if self.isVisible():
+            self.is_manually_hidden = True
+            self.hide()
+        else:
+            self.is_manually_hidden = False
+            self.show()
+            self.make_topmost()
+            self.raise_()
+            self.activateWindow()
+            self.update_mask()
+
+    def toggle_minimal_mode_from_tray(self):
+        if self.is_minimal_mode:
+            self.exit_minimal_mode()
+        else:
+            self.enter_minimal_mode()
+
+    def toggle_autostart(self, checked):
+        set_autostart_enabled(checked)
+        self.act_autostart.setChecked(is_autostart_enabled())
+
+    def clean_exit_app(self):
+        if hasattr(self, "tray_icon") and self.tray_icon:
+            self.tray_icon.hide()
+        self.clean_exit()
+
+    def update_tray_icon(self):
+        if not hasattr(self, "tray_icon") or not self.tray_icon:
+            return
+
+        is_busy = bool(self.metrics.get("is_busy", False))
+        pct_val = float(self.metrics.get("percent", 0.0))
+        pending_act = self.metrics.get("pending_action")
+
+        icon = generate_tray_icon(is_busy, pct_val, pending_act)
+        self.tray_icon.setIcon(icon)
+
+        status_desc = "思考中 ⚡" if is_busy else "待机"
+        if pending_act == "ask_question":
+            status_desc = "待回答 ❓"
+        elif pending_act == "plan_approval":
+            status_desc = "待审批 🛡️"
+
+        total_used = self.metrics.get("total_used", 0)
+        proj = self.metrics.get("project_name", "Antigravity")
+        tip = f"Antigravity 灵动岛\n状态: {status_desc}\nToken: {pct_val:.1f}% ({total_used/1000:.1f}k / 1.0M)\n项目: {proj}"
+        self.tray_icon.setToolTip(tip)
+
+    # -------------------------------------------------------------
+    # 单实例 IPC 服务端与跨进程唤醒 (Single-Instance IPC Wakeup)
+    # -------------------------------------------------------------
+    def setup_ipc_server(self):
+        self.ipc_server = QLocalServer(self)
+        QLocalServer.removeServer(IPC_PIPE_NAME)
+        self.ipc_server.listen(IPC_PIPE_NAME)
+        self.ipc_server.newConnection.connect(self.on_ipc_incoming_connection)
+
+    def on_ipc_incoming_connection(self):
+        client = self.ipc_server.nextPendingConnection()
+        if not client:
+            return
+        client.readyRead.connect(lambda: self.handle_ipc_message(client))
+
+    def handle_ipc_message(self, client):
+        try:
+            msg = bytes(client.readAll()).decode("utf-8", errors="ignore").strip()
+            if "WAKE_UP" in msg:
+                self.wake_up_island()
+        except Exception:
+            pass
+
+    def wake_up_island(self):
+        """无论当前处于隐藏到托盘还是极简微圆，安全唤醒并置顶显现"""
+        self.is_manually_hidden = False
+        if getattr(self, "is_tucked", False):
+            self.untuck(fast=True)
+        self.show()
+        self.make_topmost()
+        self.raise_()
+        self.activateWindow()
+        self.update_mask()
+        self.update()
+
+    # -------------------------------------------------------------
+    # 边缘贴靠灵动收缩机制 (Edge Notch Auto-Tuck Engine)
+    # -------------------------------------------------------------
+    def schedule_auto_tuck(self):
+        """检查并规划贴边收缩倒计时（智能状态豁免判定）"""
+        if not getattr(self, "auto_tuck_enabled", True) or getattr(self, "is_minimal_mode", False):
+            return
+
+        # 强力状态豁免条件：若鼠标在岛内、药丸栏或卡片开启、忙碌思考中、阻断待办中或通知中，绝不收缩！
+        pill_open = hasattr(self, "pill_bar") and self.pill_bar.isVisible() and not self.pill_bar.is_closing
+        flyout_open = hasattr(self, "action_flyout") and self.action_flyout.isVisible() and not self.action_flyout.is_closing
+        is_busy = bool(self.metrics.get("is_busy", False))
+        has_pending = bool(self.metrics.get("pending_action"))
+
+        if self.is_mouse_inside or pill_open or flyout_open or is_busy or has_pending or self.is_notifying:
+            if hasattr(self, "tuck_countdown_timer"):
+                self.tuck_countdown_timer.stop()
+            if self.is_tucked:
+                self.untuck()
+            return
+
+        if not self.is_tucked and hasattr(self, "tuck_countdown_timer") and not self.tuck_countdown_timer.isActive():
+            self.tuck_countdown_timer.start(self.tuck_delay_ms)
+
+    def start_tuck(self):
+        """开始向上贴顶收缩为 3px 极简呼吸微刘海 (Notch Retract)"""
+        if not getattr(self, "auto_tuck_enabled", True) or getattr(self, "is_minimal_mode", False) or self.is_tucked:
+            return
+
+        # 再次严格校验豁免条件
+        pill_open = hasattr(self, "pill_bar") and self.pill_bar.isVisible() and not self.pill_bar.is_closing
+        flyout_open = hasattr(self, "action_flyout") and self.action_flyout.isVisible() and not self.action_flyout.is_closing
+        if self.is_mouse_inside or pill_open or flyout_open or self.metrics.get("is_busy") or self.metrics.get("pending_action") or self.is_notifying:
+            return
+
+        self.is_tucked = True
+        self.tuck_target_y_offset = -39.0
+        self.tuck_vel = 0.0
+        self.last_tuck_tick_time = time.perf_counter()
+        if hasattr(self, "tuck_spring_timer") and not self.tuck_spring_timer.isActive():
+            self.tuck_spring_timer.start(7)
+        if hasattr(self, "tuck_edge_sensor_timer") and not self.tuck_edge_sensor_timer.isActive():
+            self.tuck_edge_sensor_timer.start(45)
+
+    def untuck(self, fast=False):
+        """从顶缘顺滑滑落展开回标准岛（带 1.2px 柔和微弹性回弹）"""
+        if hasattr(self, "tuck_countdown_timer"):
+            self.tuck_countdown_timer.stop()
+
+        if not self.is_tucked and abs(self.tuck_y_offset) < 0.1:
+            return
+
+        self.is_tucked = False
+        self.tuck_target_y_offset = 0.0
+
+        if fast:
+            self.tuck_y_offset = 0.0
+            self.tuck_vel = 0.0
+            self.move(self.x(), int(self.base_win_y))
+            if hasattr(self, "tuck_spring_timer"):
+                self.tuck_spring_timer.stop()
+            if hasattr(self, "tuck_edge_sensor_timer"):
+                self.tuck_edge_sensor_timer.stop()
+            self.update_mask()
+            self.update()
+            return
+
+        self.last_tuck_tick_time = time.perf_counter()
+        if hasattr(self, "tuck_spring_timer") and not self.tuck_spring_timer.isActive():
+            self.tuck_spring_timer.start(7)
+
+    def on_tuck_spring_tick(self):
+        """7ms 二阶物理弹簧落体动效驱动帧"""
+        now = time.perf_counter()
+        dt = getattr(self, "last_tuck_tick_time", now)
+        dt = min(0.025, max(0.002, now - dt))
+        self.last_tuck_tick_time = now
+
+        # 动力学参数：滑落时带 1.2px 柔和微回弹 (response=0.22, zeta=0.76)，收回时平滑吸附 (response=0.20, zeta=0.88)
+        if self.tuck_target_y_offset < -10.0:
+            omega0 = 6.283185 / 0.20
+            zeta = 0.88
+        else:
+            omega0 = 6.283185 / 0.22
+            zeta = 0.76
+
+        delta = self.tuck_y_offset - self.tuck_target_y_offset
+        accel = -omega0 * omega0 * delta - 2.0 * zeta * omega0 * self.tuck_vel
+        self.tuck_vel += accel * dt
+        self.tuck_y_offset += self.tuck_vel * dt
+
+        # 停机判定
+        if abs(delta) < 0.25 and abs(self.tuck_vel) < 0.9:
+            self.tuck_y_offset = self.tuck_target_y_offset
+            self.tuck_vel = 0.0
+            self.tuck_spring_timer.stop()
+            if not self.is_tucked:
+                self.tuck_edge_sensor_timer.stop()
+
+        target_y = int(self.base_win_y + self.tuck_y_offset)
+        self.move(self.x(), target_y)
+        self.update_mask()
+        self.update()
+
+    def check_tuck_edge_hover(self):
+        """贴顶收缩态下的极顶光标感应（触顶极速滑落）"""
+        if not self.is_tucked:
+            if hasattr(self, "tuck_edge_sensor_timer"):
+                self.tuck_edge_sensor_timer.stop()
+            return
+
+        pos = QCursor.pos()
+        target_scr = QApplication.screenAt(self.geometry().center()) or QApplication.screenAt(pos)
+        if not target_scr:
+            target_scr = QApplication.primaryScreen()
+        avail = target_scr.availableGeometry()
+
+        # 判定光标是否触碰屏幕极顶（avail.top() ~ avail.top() + 6px）且处于岛体水平感应范围
+        c_left = self.x() + (CANVAS_W - COMPACT_W) / 2.0
+        c_right = c_left + COMPACT_W
+        if avail.top() <= pos.y() <= avail.top() + 8:
+            if c_left - 20 <= pos.x() <= c_right + 20:
+                self.untuck()
+
+    def toggle_auto_tuck(self, checked):
+        """托盘菜单切换贴边自动收缩开关"""
+        self.auto_tuck_enabled = checked
+        self.cfg["auto_tuck"] = checked
+        save_config(self.cfg)
+        if not checked and self.is_tucked:
+            self.untuck(fast=False)
+        elif checked:
+            self.schedule_auto_tuck()
 
     # -------------------------------------------------------------
     # 移出自动收回多窗口联合感应桥 (Multi-Window Hover Bridge)
@@ -2075,7 +2726,14 @@ class SmoothDynamicIsland(QWidget):
         self.worker.start()
 
     def on_running_state_changed(self, running):
-        if self.cfg.get("auto_hide", True):
+        state_changed = (running != getattr(self, "last_running", None))
+        self.last_running = running
+
+        # 用户手动通过托盘或操作隐藏时，绝不自动弹窗打扰
+        if getattr(self, "is_manually_hidden", False):
+            return
+
+        if self.cfg.get("auto_hide", True) and state_changed:
             if running and self.isHidden():
                 self.show()
                 self.make_topmost()
@@ -2170,6 +2828,16 @@ class SmoothDynamicIsland(QWidget):
         ):
             self.update_mask()
             self.update()
+        self.update_tray_icon()
+
+        # 边缘贴靠灵动收缩豁免判定：若忙碌或待办阻断，强制滑出置顶展示；若空闲，调度 4 秒贴顶收缩
+        if data.get("is_busy") or pending_act:
+            if getattr(self, "is_tucked", False):
+                self.untuck()
+            if hasattr(self, "tuck_countdown_timer"):
+                self.tuck_countdown_timer.stop()
+        else:
+            self.schedule_auto_tuck()
 
     def trigger_notification(self, duration_str=""):
         if self.is_mouse_inside or self.current_w > 250:
@@ -2202,6 +2870,10 @@ class SmoothDynamicIsland(QWidget):
         self.is_mouse_inside = True
         self.notify_collapse_timer.stop()
         self.collapse_timer.stop()
+        if hasattr(self, "tuck_countdown_timer"):
+            self.tuck_countdown_timer.stop()
+        if getattr(self, "is_tucked", False):
+            self.untuck()
 
         if self.is_minimal_mode:
             super().enterEvent(event)
@@ -2264,6 +2936,7 @@ class SmoothDynamicIsland(QWidget):
         pill_open = hasattr(self, "pill_bar") and self.pill_bar.isVisible()
         if not pill_open and not flyout_open:
             self.collapse_timer.start(90)
+            self.schedule_auto_tuck()
 
         super().leaveEvent(event)
 
@@ -2375,6 +3048,10 @@ class SmoothDynamicIsland(QWidget):
     def mousePressEvent(self, event):
         rect = self.get_capsule_rect()
 
+        # 若处于贴顶收缩微刘海态，任何点击立即瞬间滑落展开
+        if getattr(self, "is_tucked", False):
+            self.untuck(fast=True)
+            rect = self.get_capsule_rect()
         # 最小微圆模式交互：左键或右键点击微圆，立即退出最小状态恢复为标准灵动岛
         if self.is_minimal_mode and not self.is_notifying:
             pt = event.position()
@@ -2453,28 +3130,59 @@ class SmoothDynamicIsland(QWidget):
                 event.accept()
                 return
 
-            screen = QApplication.primaryScreen().availableGeometry()
+            # 获取拖拽后窗口中心点所在的显示器
+            center_x = int(cur_win_x + CANVAS_W / 2.0)
+            center_y = int(cur_win_y + CANVAS_H / 2.0)
+            target_scr = QApplication.screenAt(QPoint(center_x, center_y))
+            if not target_scr:
+                target_scr = QApplication.screenAt(QCursor.pos())
+            if not target_scr:
+                target_scr = QApplication.primaryScreen()
+
+            avail = target_scr.availableGeometry()
+
             capsule_x = cur_win_x + (CANVAS_W - COMPACT_W) / 2.0
             capsule_y = cur_win_y + PADDING_TOP
 
-            if 0 <= capsule_y < 28:
-                capsule_y = 12.0
-                cur_win_y = capsule_y - PADDING_TOP
+            # 顶部磁吸判定：如果距离当前显示器可用顶边在 [0, 28] 像素以内，自动磁吸到 top + 12px
+            rel_y = capsule_y - avail.top()
+            if 0 <= rel_y < 28:
+                capsule_y = avail.top() + 12.0
 
-            cur_win_x = max(0, min(cur_win_x, screen.width() - CANVAS_W))
-            cur_win_y = max(0, min(cur_win_y, screen.height() - CANVAS_H))
-            self.move(int(cur_win_x), int(cur_win_y))
+            # 边界约束到该屏幕可用区域内，彻底支持副屏负坐标
+            min_c_x = avail.left()
+            max_c_x = avail.left() + avail.width() - COMPACT_W
+            capsule_x = max(min_c_x, min(capsule_x, max_c_x))
 
-            self.cfg["x"] = int(cur_win_x + (CANVAS_W - COMPACT_W) / 2.0)
-            self.cfg["y"] = int(cur_win_y + PADDING_TOP)
+            min_c_y = avail.top()
+            max_c_y = avail.top() + avail.height() - COMPACT_H
+            capsule_y = max(min_c_y, min(capsule_y, max_c_y))
+
+            final_win_x = int(capsule_x - (CANVAS_W - COMPACT_W) / 2.0)
+            final_win_y = int(capsule_y - PADDING_TOP)
+
+            self.move(final_win_x, final_win_y)
+            self.base_win_y = final_win_y
+            self.tuck_y_offset = 0.0
+            self.is_tucked = False
+
+            self.cfg["x"] = int(capsule_x)
+            self.cfg["y"] = int(capsule_y)
             save_config(self.cfg)
             self.update_mask()
+            self.update()
+            self.schedule_auto_tuck()
             event.accept()
 
-    def reset_to_center(self):
-        screen = QApplication.primaryScreen().availableGeometry()
-        capsule_x = (screen.width() - COMPACT_W) // 2
-        capsule_y = 12
+    def reset_to_center(self, target_screen=None):
+        if target_screen is None:
+            target_screen = self.get_target_screen()
+        if not target_screen:
+            target_screen = QApplication.primaryScreen()
+
+        avail = target_screen.availableGeometry()
+        capsule_x = avail.left() + (avail.width() - COMPACT_W) // 2
+        capsule_y = avail.top() + 12
         win_x = int(capsule_x - (CANVAS_W - COMPACT_W) / 2.0)
         win_y = int(capsule_y - PADDING_TOP)
 
@@ -2483,11 +3191,30 @@ class SmoothDynamicIsland(QWidget):
         save_config(self.cfg)
 
         self.move(win_x, win_y)
+        self.base_win_y = win_y
+        self.tuck_y_offset = 0.0
+        self.is_tucked = False
         self.make_topmost()
         self.update_mask()
         self.update()
+        self.schedule_auto_tuck()
 
     def clean_exit(self):
+        global _GLOBAL_MUTEX_HANDLE
+        if _GLOBAL_MUTEX_HANDLE:
+            try:
+                ctypes.windll.kernel32.CloseHandle(_GLOBAL_MUTEX_HANDLE)
+            except Exception:
+                pass
+            _GLOBAL_MUTEX_HANDLE = None
+        if hasattr(self, "ipc_server") and self.ipc_server:
+            try:
+                self.ipc_server.close()
+                QLocalServer.removeServer(IPC_PIPE_NAME)
+            except Exception:
+                pass
+        if hasattr(self, "tray_icon") and self.tray_icon:
+            self.tray_icon.hide()
         if hasattr(self, "halo_timer") and self.halo_timer.isActive():
             self.halo_timer.stop()
         if hasattr(self, "hover_bridge_timer") and self.hover_bridge_timer.isActive():
@@ -2522,11 +3249,38 @@ class SmoothDynamicIsland(QWidget):
         p = max(0.0, min(1.0, (w - COMPACT_W) / float(EXPANDED_W - COMPACT_W)))
         radius = 15.0 + 5.0 * p
 
-        # 纯黑深邃背景 + 细腻物理微高光发丝边框
+        # 纯黑深邃背景
         painter.setBrush(QBrush(QColor(9, 9, 11, 255)))
-        border_alpha = int(70 + 35 * p)
-        painter.setPen(QPen(QColor(255, 255, 255, border_alpha), 1.2))
+
+        # 苹果级物理光影：定向发丝微渐变边框 (顶部微高光发丝，底部自然微隐，拒绝生硬平切)
+        grad_pen = QLinearGradient(rect.left(), rect.top(), rect.left(), rect.bottom())
+        top_alpha = int(78 + 32 * p)   # 顶部微白发丝光 (~30%-43% 透明度)
+        mid_alpha = int(45 + 18 * p)   # 中腰自然过渡 (~18%-25% 透明度)
+        bot_alpha = int(18 + 12 * p)   # 底部幽深微隐 (~7%-12% 透明度)
+        grad_pen.setColorAt(0.0, QColor(255, 255, 255, top_alpha))
+        grad_pen.setColorAt(0.45, QColor(255, 255, 255, mid_alpha))
+        grad_pen.setColorAt(1.0, QColor(255, 255, 255, bot_alpha))
+        painter.setPen(QPen(QBrush(grad_pen), 1.15))
         painter.drawRoundedRect(rect, radius, radius)
+
+        # 边缘贴靠灵动收缩态：在底边露出 3px 区域正中央绘制 1.2px 发丝状态冷光纤芯 (Notch Optic Core)
+        if getattr(self, "is_tucked", False) or self.tuck_y_offset < -5.0:
+            is_busy = bool(self.metrics.get("is_busy", False))
+            pending_act = self.metrics.get("pending_action")
+            if pending_act == "ask_question":
+                optic_color = QColor(245, 158, 11, 230)  # 琥珀橙
+            elif pending_act == "plan_approval":
+                optic_color = QColor(59, 130, 246, 230)   # 宝石蓝
+            elif is_busy:
+                optic_color = QColor(56, 189, 248, 230)   # 天空蓝
+            else:
+                optic_color = QColor(16, 185, 129, 220)   # 翡翠绿
+
+            core_w = 48.0
+            core_rect = QRectF(rect.center().x() - core_w / 2.0, rect.bottom() - 2.2, core_w, 1.2)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(optic_color))
+            painter.drawRoundedRect(core_rect, 0.6, 0.6)
 
         top_left_x = rect.x()
         top_left_y = rect.y()
@@ -2674,7 +3428,7 @@ class SmoothDynamicIsland(QWidget):
             # text_fade: 当 w 从 160px 收缩至 75px 时平滑淡出，w <= 75px 完全隐去绝不绘制，根除白色断条
             text_fade = max(0.0, min(1.0, (w - 75.0) / 85.0))
 
-            # 3. 左侧状态呼吸小圆点 (伴随 text_fade 淡出)
+            # 3. 左侧状态冷光宝石指示灯 (伴随 text_fade 淡出)
             if text_fade > 0.02:
                 dot_alpha = int(alpha * text_fade)
                 center_pt = QPointF(top_left_x + 15.0, top_left_y + h / 2.0)
@@ -2683,10 +3437,22 @@ class SmoothDynamicIsland(QWidget):
                     painter.setBrush(QBrush(QColor(color_theme.red(), color_theme.green(), color_theme.blue(), int(dot_alpha * 0.35))))
                     painter.drawEllipse(center_pt, 5.5, 5.5)
 
-                painter.setBrush(QBrush(QColor(color_theme.red(), color_theme.green(), color_theme.blue(), dot_alpha)))
-                painter.drawEllipse(center_pt, 3.5, 3.5)
+                # 底座微凹槽发丝暗圈 (提升嵌入感与立体感)
+                groove_alpha = int(dot_alpha * 0.55)
+                painter.setBrush(QBrush(QColor(0, 0, 0, groove_alpha)))
+                painter.drawEllipse(center_pt, 4.3, 4.3)
 
-            # 4. 百分比圆环指示器 (Circular Ring Progress: 平滑滑动并居中锁定在 30px 正圆圆心)
+                # 宝石冷光主体核心 (3.4px)
+                painter.setBrush(QBrush(QColor(color_theme.red(), color_theme.green(), color_theme.blue(), dot_alpha)))
+                painter.drawEllipse(center_pt, 3.4, 3.4)
+
+                # 内部偏上冷光透镜微反光 (1.1px 微白晶核)
+                lens_pt = QPointF(center_pt.x() - 0.7, center_pt.y() - 0.8)
+                lens_alpha = int(dot_alpha * 0.55)
+                painter.setBrush(QBrush(QColor(255, 255, 255, lens_alpha)))
+                painter.drawEllipse(lens_pt, 1.1, 1.1)
+
+            # 4. 百分比圆环指示器 (Circular Ring Progress: 苹果腕表内嵌凹槽 + 流光游标端点)
             ring_cx_normal = top_left_x + w - 18.0
             ring_cx_centered = top_left_x + 15.0
             ring_cx = ring_cx_normal * (1.0 - p_shrink) + ring_cx_centered * p_shrink
@@ -2694,27 +3460,63 @@ class SmoothDynamicIsland(QWidget):
             ring_r = 6.2 + 0.6 * p_shrink   # 30px 圆里为 6.8px 外半径，居中饱满精致
             ring_rect = QRectF(ring_cx - ring_r, ring_cy - ring_r, ring_r * 2.0, ring_r * 2.0)
 
-            # 底环 (Track) - 半透明物理发丝边
+            # 内嵌凹槽暗轨底层 (Groove Depth Track)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            track_pen = QPen(QColor(255, 255, 255, int(alpha * 0.16)), 1.8)
+            groove_pen = QPen(QColor(0, 0, 0, int(alpha * 0.45)), 2.6)
+            painter.setPen(groove_pen)
+            painter.drawEllipse(QPointF(ring_cx, ring_cy), ring_r, ring_r)
+
+            # 底环 (Track) - 半透明物理发丝微轨
+            track_pen = QPen(QColor(255, 255, 255, int(alpha * 0.15)), 1.6)
             painter.setPen(track_pen)
             painter.drawEllipse(QPointF(ring_cx, ring_cy), ring_r, ring_r)
 
-            # 进度弧 (Progress Arc) - 12点钟顺时针展开，圆润笔触
+            # 进度弧 (Progress Arc) - 12点钟顺时针展开，圆润笔触 + 游标端点微高光
             if pct_val > 0.4:
                 prog_pen = QPen(color_theme, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
                 painter.setPen(prog_pen)
                 start_angle = 90 * 16
-                span_angle = int(-min(100.0, max(0.0, pct_val)) / 100.0 * 360.0 * 16)
+                clamped_pct = min(100.0, max(0.0, pct_val))
+                span_angle = int(-clamped_pct / 100.0 * 360.0 * 16)
                 painter.drawArc(ring_rect, start_angle, span_angle)
 
-            # 5. 百分比数值 (与圆环并列，伴随收缩平滑淡出)
+                # 游标端点微高光 (Cursor Highlight Bead)
+                end_rad = (90.0 - (clamped_pct / 100.0 * 360.0)) * (math.pi / 180.0)
+                bead_x = ring_cx + ring_r * math.cos(end_rad)
+                bead_y = ring_cy - ring_r * math.sin(end_rad)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(QColor(255, 255, 255, int(alpha * 0.85))))
+                painter.drawEllipse(QPointF(bead_x, bead_y), 0.9, 0.9)
+
+            # 5. 百分比数值 (主数字清晰突出，% 符号微降 30% 明度并紧凑排列)
             if text_fade > 0.05:
                 pct_alpha = int(alpha * text_fade)
+                raw_pct = self.cached_pct_str or "0.0%"
+                num_part = raw_pct[:-1] if raw_pct.endswith("%") else raw_pct
+                has_sym = raw_pct.endswith("%")
+
+                fm_num = QFontMetrics(self.f_pct)
+                fm_sym = QFontMetrics(self.f_pct_sym) if hasattr(self, 'f_pct_sym') else fm_num
+                w_num = fm_num.horizontalAdvance(num_part)
+                w_sym = fm_sym.horizontalAdvance("%") if has_sym else 0
+                total_w = w_num + (w_sym + 1 if has_sym else 0)
+
+                area_right = ring_cx - ring_r - 6.0
+                start_x = area_right - total_w
+
+                # 绘制主数字
                 painter.setFont(self.f_pct)
                 painter.setPen(QColor(color_theme.red(), color_theme.green(), color_theme.blue(), pct_alpha))
-                pct_rect = QRectF(ring_cx - ring_r - 45.0, top_left_y, 40.0, h)
-                painter.drawText(pct_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, self.cached_pct_str)
+                num_rect = QRectF(start_x, top_left_y, w_num, h)
+                painter.drawText(num_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, num_part)
+
+                # 绘制次级 % 符号 (微缩字号与降低明度)
+                if has_sym:
+                    sym_alpha = int(pct_alpha * 0.70)
+                    painter.setFont(self.f_pct_sym)
+                    painter.setPen(QColor(color_theme.red(), color_theme.green(), color_theme.blue(), sym_alpha))
+                    sym_rect = QRectF(start_x + w_num + 1.0, top_left_y + 1.0, w_sym + 2.0, h)
+                    painter.drawText(sym_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "%")
 
             # 6. 中间文字双层垂直滑动翻转 (仅在 text_fade > 0.05 且有足够宽度时绘制，彻底杜绝白条与截断残影)
             if text_fade > 0.05:
@@ -2724,12 +3526,13 @@ class SmoothDynamicIsland(QWidget):
                     painter.save()
                     painter.setClipRect(name_rect)
 
-                    # 层1：原项目名 (向上滑出)
+                    # 层1：原项目名 (向上滑出) - 瑞士柔和白银色排版
                     if tf < 0.99:
                         al_proj = int(alpha * (1.0 - tf) * text_fade)
                         dy_proj = -tf * 18.0
                         painter.setFont(self.f_proj)
-                        painter.setPen(QColor(244, 244, 245, al_proj))
+                        silver_color = QColor(236, 236, 241, int(al_proj * 0.92))
+                        painter.setPen(silver_color)
                         fm = painter.fontMetrics()
                         elided_proj = fm.elidedText(proj, Qt.TextElideMode.ElideRight, int(name_max_w))
                         p_rect = QRectF(name_rect.x(), name_rect.y() + dy_proj, name_rect.width(), name_rect.height())
@@ -3038,13 +3841,13 @@ def main():
 
     log_dbg(">>> MiniPillBar Cascade DropBounce main() started")
 
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+
     if not check_single_instance_or_wake():
         log_dbg("check_single_instance_or_wake returned False, exiting")
         sys.exit(0)
     log_dbg("Single instance check passed")
-
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)
 
     island = SmoothDynamicIsland()
     island.show()
