@@ -18,7 +18,11 @@ import math
 import ctypes
 import ctypes.wintypes
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    CURRENT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 os.chdir(CURRENT_DIR)
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
@@ -74,8 +78,11 @@ def is_autostart_enabled():
 
 def set_autostart_enabled(enable: bool):
     """设置或移除注册表开机静默自启项"""
-    vbs_path = os.path.join(CURRENT_DIR, "run_silent.vbs")
-    cmd = f'wscript.exe "{vbs_path}"'
+    if getattr(sys, "frozen", False):
+        cmd = f'"{sys.executable}"'
+    else:
+        vbs_path = os.path.join(CURRENT_DIR, "run_silent.vbs")
+        cmd = f'wscript.exe "{vbs_path}"'
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_REG_KEY, 0, winreg.KEY_SET_VALUE) as key:
             if enable:
@@ -322,13 +329,19 @@ def load_config():
         "on_top": True,
         "auto_hide": True,
         "auto_tuck": True,
-        "tuck_delay_ms": 4000
+        "tuck_delay_ms": 4000,
+        "minimal_mode": False
     }
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
                 default_cfg.update(saved)
+        except Exception:
+            pass
+    else:
+        try:
+            save_config(default_cfg)
         except Exception:
             pass
     return default_cfg
@@ -381,9 +394,9 @@ def check_single_instance_or_wake():
                 import subprocess
                 subprocess.run(
                     ["powershell", "-NoProfile", "-Command",
-                     "Get-Process python*, pythonw* -ErrorAction SilentlyContinue | "
+                     "Get-Process python*, pythonw*, AntigravityIsland* -ErrorAction SilentlyContinue | "
                      f"Where-Object Id -ne {os.getpid()} | "
-                     "ForEach-Object { try { $c = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $_.Id)).CommandLine; if ($c -like '*capsule_gui.py*') { Stop-Process -Id $_.Id -Force } } catch {} }"],
+                     "ForEach-Object { try { $c = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $_.Id)).CommandLine; if ($c -like '*capsule_gui.py*' -or $_.ProcessName -like 'AntigravityIsland*') { Stop-Process -Id $_.Id -Force } } catch {} }"],
                     capture_output=True, timeout=2.0
                 )
                 time.sleep(0.3)
@@ -1827,6 +1840,9 @@ class SmoothDynamicIsland(QWidget):
         self.base_win_y = win_y
 
         self.setGeometry(win_x, win_y, CANVAS_W, CANVAS_H)
+        ico_file = os.path.join(CURRENT_DIR, "assets", "app.ico")
+        if os.path.exists(ico_file):
+            self.setWindowIcon(QIcon(ico_file))
         self.update_mask()
         self.make_topmost()
 
@@ -3836,8 +3852,12 @@ class SmoothDynamicIsland(QWidget):
 
 def main():
     def log_dbg(msg):
-        with open(os.path.join(CURRENT_DIR, "capsule_debug.log"), "a", encoding="utf-8") as fp:
-            fp.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+        if os.environ.get("CAPSULE_DEBUG"):
+            try:
+                with open(os.path.join(CURRENT_DIR, "capsule_debug.log"), "a", encoding="utf-8") as fp:
+                    fp.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+            except Exception:
+                pass
 
     log_dbg(">>> MiniPillBar Cascade DropBounce main() started")
 

@@ -97,14 +97,16 @@
 
 ---
 
-## 🚀 快速开始
+### 🚀 快速开始
 
-### 环境依赖
-- **操作系统**：Windows 10 / Windows 11
-- **Python 版本**：Python 3.10+
-- **Google Antigravity**：已安装并运行
+#### 方式一：免安装便携单文件版 (推荐 🌟)
+无需配置 Python 或任何依赖环境，开箱即用：
+1. 前往 [Releases 发行页](https://github.com/17689397470/antigravity-island/releases) 下载最新版本的 `AntigravityIsland-v2.0.0-windows-x64.zip`；
+2. 解压到任意目录（或 U 盘）；
+3. 双击 `AntigravityIsland.exe` 即可启动，无黑框闪烁，配置自动保存在当前文件夹！
 
-### 1. 克隆仓库
+#### 方式二：开发者源码运行
+##### 1. 克隆仓库
 ```bash
 # 从 GitHub 克隆
 git clone https://github.com/17689397470/antigravity-island.git
@@ -115,19 +117,26 @@ git clone https://gitee.com/yan-chaoyong/antigravity-island.git
 cd antigravity-island
 ```
 
-### 2. 安装依赖
+##### 2. 安装依赖
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. 启动灵动岛
-- **方式一（无控制台静默启动，推荐）**：双击 `start.bat`。
-- **方式二（调试运行）**：
+##### 3. 启动灵动岛
+- **静默后台启动**：双击运行 `start.bat`。
+- **命令行调试**：
   ```bash
   python capsule_gui.py
   ```
 
-### 4. 安全退出
+##### 4. 自行打包为单文件 EXE
+运行根目录下的全自动构建批处理脚本：
+```bash
+build_exe.bat
+```
+构建产物与校验文件将自动输出到 `dist/` 目录下。
+
+### 🛑 安全退出
 - 在系统托盘图标上右键，点击【彻底退出灵动岛】；
 - 或在灵动岛上点击**鼠标右键**，点击药丸栏最右侧的**退出按钮**；
 - 或双击运行 `stop.bat`。
@@ -167,7 +176,7 @@ pip install -r requirements.txt
 - [x] 工业级 Win32 Named Mutex 单实例互斥与本地 IPC 唤醒
 - [x] 多显示器 DPI 追踪、智能跟随与副屏负坐标全兼容
 - [x] 边缘贴靠灵动收缩（Edge Notch Auto-Tuck）与智能状态豁免
-- [ ] 基于 PyInstaller / Nuitka 打包发布单个免安装可执行文件 (`.exe`)
+- [x] 基于 PyInstaller 深度裁剪打包工业级免安装便携单文件 (`AntigravityIsland.exe`)
 - [ ] 类似 iOS 灵动岛的多模态轻量水滴音效与流体呼吸光波
 
 ---

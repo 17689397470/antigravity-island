@@ -28,6 +28,7 @@ When working with **Google Antigravity** (built on Gemini 1M Context Window), de
 
 ## ✨ Key Features (v2.0.0)
 
+- 📦 **Standalone Portable Single-File EXE**: Runs on any Windows 10/11 machine without Python or PyQt6 installed. True zero-install portability—`config.json` is always saved alongside the executable. Features 256px obsidian vector icon and Windows PE metadata.
 - 🍃 **Edge Notch Auto-Tuck**: Automatically retracts to an ultra-minimal **182x3px Obsidian Notch** after 4s of idle time. Touching the very top edge drops the island down smoothly with **1.2px elastic overshoot & settle**. Includes **Smart Immunity Rules** (automatically un-tucks when agent is busy or waiting for approval).
 - 🖥️ **Multi-Monitor & Negative Coordinate Support**: Smart auto-following detects which monitor Antigravity IDE is on and docks to it. Fully supports Windows non-standard arrangements and negative coordinates ($X < 0$), plus hotplug failover safely returning to primary monitor. Includes a dynamic tray submenu `Dock to Monitor ▶`.
 - 💎 **Swiss Micro-Typography & Optical Physics**: Directional Fresnel hairline border, optical jewel indicator light, Segoe UI Variable Text (500 Medium) typography, and recessed dark track with cursor specular highlight.
@@ -58,12 +59,19 @@ When working with **Google Antigravity** (built on Gemini 1M Context Window), de
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### Option 1: Standalone Portable EXE (Recommended 🌟)
+No Python or dependency setup needed:
+1. Download `AntigravityIsland-v2.0.0-windows-x64.zip` from [Releases](https://github.com/17689397470/antigravity-island/releases).
+2. Unpack anywhere (or onto a USB drive).
+3. Double-click `AntigravityIsland.exe` to launch immediately!
+
+### Option 2: Run from Source
+#### Prerequisites
 - Windows 10 or 11
 - Python 3.10+
 - Google Antigravity installed
 
-### Installation & Run
+#### Installation & Run
 ```bash
 git clone https://github.com/17689397470/antigravity-island.git
 cd antigravity-island
@@ -71,6 +79,11 @@ pip install -r requirements.txt
 python capsule_gui.py
 ```
 Or simply double-click `start.bat` for silent background execution.
+
+#### Build EXE Yourself
+```bash
+build_exe.bat
+```
 
 ---
 
