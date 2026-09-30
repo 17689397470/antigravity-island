@@ -464,8 +464,9 @@ class MiniPillBar(QWidget):
         # 提示文本定义
         self.tip_labels = ["立即刷新数据", "重置顶部居中", "切换最小微圆", "退出灵动岛"]
 
-        # 字体 (优先微软雅黑，字重 Medium，小字极清晰)
-        self.f_tip = QFont("Microsoft YaHei", 8)
+        # 字体 (优先 MiSans，优雅柔和，小字极清晰)
+        self.f_tip = QFont("MiSans", 8)
+        self.f_tip.setFamilies(["MiSans", "Microsoft YaHei", "Segoe UI"])
         self.f_tip.setWeight(QFont.Weight.Medium)
 
         # -----------------------------
@@ -877,17 +878,28 @@ class ActionFlyoutCard(QWidget):
         self.metrics_data = {}
         self.action_type = "plan_approval"
 
-        # 字体规范 (纯正原生苹果排版风格)
-        self.f_tit = QFont("Segoe UI", 9)
+        # 字体规范 (Cascadia Code + MiSans 现代高颜值排版)
+        self.f_tit = QFont("MiSans", 9)
+        self.f_tit.setFamilies(["MiSans", "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei"])
         self.f_tit.setBold(True)
-        self.f_sub = QFont("Microsoft YaHei", 8)
+
+        self.f_sub = QFont("MiSans", 8)
+        self.f_sub.setFamilies(["MiSans", "Microsoft YaHei", "Segoe UI"])
         self.f_sub.setWeight(QFont.Weight.Medium)
-        self.f_chip = QFont("Segoe UI", 8)
+
+        self.f_chip = QFont("Cascadia Code", 8)
+        self.f_chip.setFamilies(["Cascadia Code", "Consolas", "Segoe UI"])
         self.f_chip.setBold(True)
-        self.f_step = QFont("Microsoft YaHei", 8)
-        self.f_btn = QFont("Microsoft YaHei", 8)
+
+        self.f_step = QFont("MiSans", 8)
+        self.f_step.setFamilies(["MiSans", "Microsoft YaHei", "Segoe UI"])
+
+        self.f_btn = QFont("MiSans", 8)
+        self.f_btn.setFamilies(["MiSans", "Microsoft YaHei", "Segoe UI"])
         self.f_btn.setBold(True)
-        self.f_opt = QFont("Microsoft YaHei", 8)
+
+        self.f_opt = QFont("MiSans", 8)
+        self.f_opt.setFamilies(["MiSans", "Microsoft YaHei", "Segoe UI"])
 
         # 144Hz 苹果原生二阶流体动力学解算器 (高敏捷丝滑展开)
         self.spring_progress = 0.0
@@ -1692,43 +1704,52 @@ class SmoothDynamicIsland(QWidget):
         self.schedule_auto_tuck()
 
     def init_resources(self):
-        # 瑞士现代排版：优先 Segoe UI Variable Text / Segoe UI，Medium 500 字重，优雅克制
-        self.f_proj = QFont("Segoe UI Variable Text", 9)
-        if not self.f_proj.exactMatch():
-            self.f_proj = QFont("Segoe UI", 9)
+        # 现代高颜值排版：数字/代码 Cascadia Code，文字/UI MiSans
+        self.f_proj = QFont("MiSans", 9)
+        self.f_proj.setFamilies(["MiSans", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei"])
         self.f_proj.setWeight(QFont.Weight.Medium)
 
-        # 百分比数字与符号精细分离
-        self.f_pct = QFont("Consolas", 9)
+        # 百分比数字与符号精细分离 (Cascadia Code 现代等宽与连字)
+        self.f_pct = QFont("Cascadia Code", 9)
+        self.f_pct.setFamilies(["Cascadia Code", "Consolas"])
         self.f_pct.setBold(True)
-        self.f_pct_sym = QFont("Segoe UI Variable Text", 7)
-        if not self.f_pct_sym.exactMatch():
-            self.f_pct_sym = QFont("Segoe UI", 7)
+
+        self.f_pct_sym = QFont("Cascadia Code", 7)
+        self.f_pct_sym.setFamilies(["Cascadia Code", "Segoe UI Variable Text", "Segoe UI"])
         self.f_pct_sym.setWeight(QFont.Weight.Medium)
 
-        self.f_notify = QFont("Segoe UI", 9)
+        self.f_notify = QFont("MiSans", 9)
+        self.f_notify.setFamilies(["MiSans", "Segoe UI Variable Display", "Segoe UI"])
         self.f_notify.setBold(True)
 
-        self.f_exp_proj = QFont("Segoe UI", 10)
+        self.f_exp_proj = QFont("MiSans", 10)
+        self.f_exp_proj.setFamilies(["MiSans", "Segoe UI Variable Display", "Segoe UI"])
         self.f_exp_proj.setBold(True)
 
-        self.f_tag = QFont("Segoe UI", 7)
+        self.f_tag = QFont("MiSans", 7)
+        self.f_tag.setFamilies(["MiSans", "Segoe UI Variable Text", "Segoe UI"])
         self.f_tag.setBold(True)
 
-        self.f_used = QFont("Consolas", 10)
+        self.f_used = QFont("Cascadia Code", 10)
+        self.f_used.setFamilies(["Cascadia Code", "Consolas"])
         self.f_used.setBold(True)
 
-        self.f_cap = QFont("Segoe UI", 8)
+        self.f_cap = QFont("MiSans", 8)
+        self.f_cap.setFamilies(["MiSans", "Segoe UI Variable Text", "Segoe UI"])
 
-        self.f_big_pct = QFont("Consolas", 11)
+        self.f_big_pct = QFont("Cascadia Code", 11)
+        self.f_big_pct.setFamilies(["Cascadia Code", "Consolas"])
         self.f_big_pct.setBold(True)
 
-        self.f_tip = QFont("Microsoft YaHei", 8)
+        self.f_tip = QFont("MiSans", 8)
+        self.f_tip.setFamilies(["MiSans", "Microsoft YaHei", "Segoe UI"])
         self.f_tip.setWeight(QFont.Weight.Medium)
 
-        self.f_lbl = QFont("Segoe UI", 8)
+        self.f_lbl = QFont("MiSans", 8)
+        self.f_lbl.setFamilies(["MiSans", "Segoe UI Variable Text", "Segoe UI"])
 
-        self.f_val = QFont("Consolas", 8)
+        self.f_val = QFont("Cascadia Code", 8)
+        self.f_val.setFamilies(["Cascadia Code", "Consolas"])
         self.f_val.setBold(True)
 
         self.c_model = QColor(16, 185, 129)
@@ -3376,9 +3397,9 @@ class SmoothDynamicIsland(QWidget):
 
             # 3. 悬停浮动气泡徽章 (Hover Floating Badge)
             if self.minimal_hover_alpha > 0.01:
-                badge_font = QFont("Segoe UI Variable Display", 8, QFont.Weight.Medium)
-                if not badge_font.exactMatch():
-                    badge_font = QFont("Segoe UI", 8, QFont.Weight.Medium)
+                badge_font = QFont("Cascadia Code", 8)
+                badge_font.setFamilies(["Cascadia Code", "MiSans", "Segoe UI Variable Display", "Segoe UI"])
+                badge_font.setWeight(QFont.Weight.Medium)
                 fm = QFontMetrics(badge_font)
                 status_desc = "运行中" if is_busy else "待机"
                 badge_text = f"{pct_val:.1f}% · {status_desc}"
